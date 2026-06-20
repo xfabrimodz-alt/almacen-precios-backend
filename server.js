@@ -106,14 +106,8 @@ app.get('/sucursales', async (req, res) => {
 app.get('/diagnostico-busqueda', async (req, res) => {
   const q = req.query.q || 'coca cola';
   const candidatos = [
-    `${PRECIOS_CLAROS_BASE}/productos?texto=${encodeURIComponent(q)}&limit=5`,
-    `${PRECIOS_CLAROS_BASE}/productos?nombre=${encodeURIComponent(q)}&limit=5`,
-    `${PRECIOS_CLAROS_BASE}/productos?query=${encodeURIComponent(q)}&limit=5`,
-    `${PRECIOS_CLAROS_BASE}/productos?busqueda=${encodeURIComponent(q)}&limit=5`,
-    `${PRECIOS_CLAROS_BASE}/busqueda?texto=${encodeURIComponent(q)}&limit=5`,
-    `${PRECIOS_CLAROS_BASE}/producto?texto=${encodeURIComponent(q)}&limit=5`,
-    `${PRECIOS_CLAROS_BASE}/productos?q=${encodeURIComponent(q)}&limit=5`,
-    `${PRECIOS_CLAROS_BASE}/productos?ean=${encodeURIComponent(q)}&limit=5`,
+    `${PRECIOS_CLAROS_BASE}/productos?string=${encodeURIComponent(q)}&limit=5`,
+    `${PRECIOS_CLAROS_BASE}/productos?string=${encodeURIComponent(q)}&lat=${ALMACEN_LAT}&lng=${ALMACEN_LNG}&limit=5`,
   ];
 
   const resultados = [];
