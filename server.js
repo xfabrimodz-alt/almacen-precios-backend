@@ -95,104 +95,8 @@ app.get('/sucursales', async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// GET /diagnostico-busqueda?q=coca+cola
+// GET /precio?ean=...&nombre=...
 // ------------------------------------------------------------
-// ESTE ENDPOINT ES TEMPORAL, solo para la Fase 1.
-// Prueba varias rutas candidatas contra la API de Precios Claros
-// para descubrir cuál es el endpoint real de búsqueda por texto/EAN.
-// Una vez que sepamos cuál funciona, lo vamos a fijar en el código
-// y este endpoint de diagnóstico se puede borrar.
-// ------------------------------------------------------------
-app.get('/diagnostico-busqueda', async (req, res) => {
-  const q = req.query.q || 'coca cola';
-  const candidatos = [
-    `${PRECIOS_CLAROS_BASE}/productos?string=${encodeURIComponent(q)}&limit=5`,
-    `${PRECIOS_CLAROS_BASE}/productos?string=${encodeURIComponent(q)}&lat=${ALMACEN_LAT}&lng=${ALMACEN_LNG}&limit=5`,
-  ];
-
-  const resultados = [];
-  for (const url of candidatos) {
-    try {
-      const resp = await fetch(url, { timeout: 8000 });
-      const text = await resp.text();
-      let parsed = null;
-      let esJson = false;
-      try {
-        parsed = JSON.parse(text);
-        esJson = true;
-      } catch (_) {
-        // no es JSON, dejamos el texto crudo recortado
-      }
-      resultados.push({
-        url,
-        status: resp.status,
-        esJson,
-        preview: esJson ? parsed : text.slice(0, 300),
-      });
-    } catch (err) {
-      resultados.push({ url, error: err.message });
-    }
-  }
-
-  res.json({ query: q, resultados });
-});
-
-// ------------------------------------------------------------
-// GET /diagnostico-detalle?ean=7790490998231
-// ------------------------------------------------------------
-// TEMPORAL: muestra la respuesta CRUDA del endpoint /producto de
-// Precios Claros, sin parsear nada, para descubrir la estructura
-// real de los campos de precio/promo (nombres de campo exactos).
-// ------------------------------------------------------------
-app.get('/diagnostico-detalle', async (req, res) => {
-  const ean = req.query.ean;
-  if (!ean) return res.status(400).json({ error: 'Falta el parámetro ean' });
-
-  try {
-    const sucursales = await obtenerSucursalesCercanas();
-    const idsSucursales = sucursales.map((s) => s.id).slice(0, 5); // solo 5 para el test
-
-    const variantes = [
-      {
-        nombre: 'array JSON.stringify + encodeURIComponent',
-        url: `${PRECIOS_CLAROS_BASE}/producto?id_producto=${encodeURIComponent(ean)}&array_sucursales=${encodeURIComponent(JSON.stringify(idsSucursales))}&limit=10`,
-      },
-      {
-        nombre: 'array JSON.stringify SIN encodeURIComponent',
-        url: `${PRECIOS_CLAROS_BASE}/producto?id_producto=${ean}&array_sucursales=${JSON.stringify(idsSucursales)}&limit=10`,
-      },
-      {
-        nombre: 'array separado por comas, sin corchetes',
-        url: `${PRECIOS_CLAROS_BASE}/producto?id_producto=${ean}&array_sucursales=${idsSucursales.join(',')}&limit=10`,
-      },
-      {
-        nombre: 'id_sucursal singular (primera sucursal)',
-        url: `${PRECIOS_CLAROS_BASE}/producto?id_producto=${ean}&id_sucursal=${idsSucursales[0]}&limit=10`,
-      },
-      {
-        nombre: 'solo lat/lng (sin sucursales ni id_sucursal)',
-        url: `${PRECIOS_CLAROS_BASE}/producto?id_producto=${ean}&lat=${ALMACEN_LAT}&lng=${ALMACEN_LNG}&limit=10`,
-      },
-    ];
-
-    const resultados = [];
-    for (const v of variantes) {
-      try {
-        const resp = await fetch(v.url);
-        const data = await resp.json();
-        resultados.push({ variante: v.nombre, url: v.url, respuesta: data });
-      } catch (err) {
-        resultados.push({ variante: v.nombre, url: v.url, error: err.message });
-      }
-    }
-
-    res.json({ idsSucursalesUsados: idsSucursales, resultados });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-
 // Endpoint principal para consultar UN producto.
 // 1. Busca por EAN exacto (más preciso).
 // 2. Si no hay resultados por EAN, intenta por nombre como respaldo.
@@ -343,7 +247,10 @@ async function buscarProductosPorTexto(texto, idsSucursales) {
 // agrupado por cadena (bandera), quedándose con el mejor precio de lista
 // de cada cadena entre las sucursales cercanas.
 async function obtenerDetalleProducto(idProducto, idsSucursales) {
-  const arraySucursales = encodeURIComponent(JSON.stringify(idsSucursales));
+  // IMPORTANTE: confirmado con datos reales que array_sucursales va
+  // como lista separada por comas, SIN corchetes ni comillas.
+  // (ej: 15-1-5573,12-1-65,15-1-143)
+  const arraySucursales = idsSucursales.join(',');
   const url = `${PRECIOS_CLAROS_BASE}/producto?id_producto=${encodeURIComponent(idProducto)}&array_sucursales=${arraySucursales}&limit=50`;
   const resp = await fetch(url);
   const data = await resp.json();
@@ -351,15 +258,28 @@ async function obtenerDetalleProducto(idProducto, idsSucursales) {
   if (data.status !== 200 || !Array.isArray(data.sucursales)) return [];
 
   // Agrupar por cadena (banderaDescripcion), quedándonos con el precio
-  // de lista más bajo de cada cadena entre las sucursales cercanas
+  // de lista más bajo de cada cadena entre las sucursales cercanas.
+  // Nota sobre la estructura real de "preciosProducto" (confirmada con
+  // datos en vivo): promo1/promo2 siempre existen como objeto, pero
+  // "precio" y "descripcion" vienen vacíos ("") cuando no hay promo
+  // activa. Por eso no alcanza con chequear si el objeto existe: hay
+  // que chequear que "precio" sea un número real.
   const porCadena = {};
   for (const s of data.sucursales) {
     const cadena = s.banderaDescripcion || 'Desconocida';
     const precioInfo = s.preciosProducto || {};
     const precioLista = precioInfo.precioLista;
-    if (precioLista == null) continue;
+    if (precioLista == null || precioLista === '') continue;
 
-    const tienePromo = !!(precioInfo.promo1 || precioInfo.promo2);
+    const promo1 = precioInfo.promo1 || {};
+    const promo2 = precioInfo.promo2 || {};
+    const promoA = typeof promo1.precio === 'number'
+      ? { precio: promo1.precio, descripcion: promo1.descripcion || null }
+      : null;
+    const promoB = typeof promo2.precio === 'number'
+      ? { precio: promo2.precio, descripcion: promo2.descripcion || null }
+      : null;
+    const tienePromo = !!(promoA || promoB);
 
     if (!porCadena[cadena] || precioLista < porCadena[cadena].precioLista) {
       porCadena[cadena] = {
@@ -367,12 +287,8 @@ async function obtenerDetalleProducto(idProducto, idsSucursales) {
         direccion: s.direccion,
         localidad: s.localidad,
         precioLista,
-        promoA: precioInfo.promo1
-          ? { precio: precioInfo.promo1.precio, detalle: precioInfo.promo1.detalle || null }
-          : null,
-        promoB: precioInfo.promo2
-          ? { precio: precioInfo.promo2.precio, detalle: precioInfo.promo2.detalle || null }
-          : null,
+        promoA,
+        promoB,
         tienePromo,
       };
     }
