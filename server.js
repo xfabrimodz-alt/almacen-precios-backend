@@ -39,6 +39,11 @@ const CADENAS_OBJETIVO = [
   'Coto',
 ];
 
+// Radio máximo (en km) para considerar una sucursal "cercana".
+// Definido para cubrir Quilmes, Solano y Florencio Varela sin
+// traer sucursales lejanas de CABA u otras zonas.
+const RADIO_MAXIMO_KM = 8;
+
 // Cache simple en memoria de sucursales cercanas, para no pedirlas
 // de nuevo en cada consulta (se recalcula al reiniciar el server)
 let sucursalesCache = null;
@@ -46,6 +51,9 @@ let sucursalesCache = null;
 async function obtenerSucursalesCercanas() {
   if (sucursalesCache) return sucursalesCache;
 
+  // Pedimos un límite generoso (la API ordena por cercanía), pero el
+  // filtro real de "cercanía" lo hacemos nosotros por distanciaNumero,
+  // no confiando en que el limit alto alcance para acotar la zona.
   const url = `${PRECIOS_CLAROS_BASE}/sucursales?lat=${ALMACEN_LAT}&lng=${ALMACEN_LNG}&limit=3000`;
   const resp = await fetch(url);
   if (!resp.ok) {
@@ -54,15 +62,39 @@ async function obtenerSucursalesCercanas() {
   const data = await resp.json();
   const todas = data.sucursales || [];
 
-  // Filtramos solo las cadenas que nos interesan
-  const filtradas = todas.filter((s) =>
-    CADENAS_OBJETIVO.some((nombre) =>
+  // Filtramos por cadena Y por radio real en km (distanciaNumero viene
+  // de la propia API, calculado desde ALMACEN_LAT/ALMACEN_LNG).
+  const filtradas = todas.filter((s) => {
+    const esCadenaObjetivo = CADENAS_OBJETIVO.some((nombre) =>
       (s.banderaDescripcion || '').toLowerCase().includes(nombre.toLowerCase())
-    )
-  );
+    );
+    if (!esCadenaObjetivo) return false;
+    // Si la API no informa distancia en este endpoint, la calculamos
+    // nosotros mismos con lat/lng de la sucursal (fórmula haversine).
+    const distancia = typeof s.distanciaNumero === 'number'
+      ? s.distanciaNumero
+      : calcularDistanciaKm(ALMACEN_LAT, ALMACEN_LNG, parseFloat(s.lat), parseFloat(s.lng));
+    return distancia <= RADIO_MAXIMO_KM;
+  });
 
   sucursalesCache = filtradas;
   return filtradas;
+}
+
+// Distancia en línea recta entre dos coordenadas (fórmula haversine).
+// La usamos como respaldo si el endpoint de sucursales no trae
+// distanciaNumero (ese campo solo lo vimos confirmado en /producto).
+function calcularDistanciaKm(lat1, lng1, lat2, lng2) {
+  if ([lat1, lng1, lat2, lng2].some((n) => typeof n !== 'number' || isNaN(n))) {
+    return Infinity; // si faltan coordenadas, la descartamos por las dudas
+  }
+  const R = 6371; // radio de la Tierra en km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 // ------------------------------------------------------------
@@ -82,29 +114,19 @@ app.get('/sucursales', async (req, res) => {
     const sucursales = await obtenerSucursalesCercanas();
     res.json({
       total: sucursales.length,
+      radioMaximoKm: RADIO_MAXIMO_KM,
       sucursales: sucursales.map((s) => ({
         id: s.id,
         bandera: s.banderaDescripcion,
         direccion: s.direccion,
         localidad: s.localidad,
-      })),
+        distanciaKm: typeof s.distanciaNumero === 'number'
+          ? Math.round(s.distanciaNumero * 100) / 100
+          : Math.round(calcularDistanciaKm(ALMACEN_LAT, ALMACEN_LNG, parseFloat(s.lat), parseFloat(s.lng)) * 100) / 100,
+      })).sort((a, b) => a.distanciaKm - b.distanciaKm),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/diagnostico-texto', async (req, res) => {
-  const texto = req.query.q || 'coca cola';
-  try {
-    const sucursales = await obtenerSucursalesCercanas();
-    const idsSucursales = sucursales.map((s) => s.id);
-    const url = `${PRECIOS_CLAROS_BASE}/productos?string=${encodeURIComponent(texto)}&lat=${ALMACEN_LAT}&lng=${ALMACEN_LNG}&limit=10`;
-    const resp = await fetch(url);
-    const data = await resp.json();
-    res.json({ texto, urlConsultada: url, status: resp.status, respuestaCruda: data });
-  } catch (err) {
-    res.status(500).json({ error: err.message, stack: err.stack });
   }
 });
 
