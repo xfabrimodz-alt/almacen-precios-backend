@@ -94,6 +94,20 @@ app.get('/sucursales', async (req, res) => {
   }
 });
 
+app.get('/diagnostico-texto', async (req, res) => {
+  const texto = req.query.q || 'coca cola';
+  try {
+    const sucursales = await obtenerSucursalesCercanas();
+    const idsSucursales = sucursales.map((s) => s.id);
+    const url = `${PRECIOS_CLAROS_BASE}/productos?string=${encodeURIComponent(texto)}&lat=${ALMACEN_LAT}&lng=${ALMACEN_LNG}&limit=10`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    res.json({ texto, urlConsultada: url, status: resp.status, respuestaCruda: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+});
+
 // ------------------------------------------------------------
 // GET /precio?ean=...&nombre=...
 // ------------------------------------------------------------
