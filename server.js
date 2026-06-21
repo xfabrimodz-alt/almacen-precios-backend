@@ -138,8 +138,30 @@ app.get('/diagnostico-busqueda', async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// GET /precio?ean=7790990004081&nombre=Edulcorante Hileret 250ml
+// GET /diagnostico-detalle?ean=7790490998231
 // ------------------------------------------------------------
+// TEMPORAL: muestra la respuesta CRUDA del endpoint /producto de
+// Precios Claros, sin parsear nada, para descubrir la estructura
+// real de los campos de precio/promo (nombres de campo exactos).
+// ------------------------------------------------------------
+app.get('/diagnostico-detalle', async (req, res) => {
+  const ean = req.query.ean;
+  if (!ean) return res.status(400).json({ error: 'Falta el parámetro ean' });
+
+  try {
+    const sucursales = await obtenerSucursalesCercanas();
+    const idsSucursales = sucursales.map((s) => s.id);
+    const arraySucursales = encodeURIComponent(JSON.stringify(idsSucursales));
+    const url = `${PRECIOS_CLAROS_BASE}/producto?id_producto=${encodeURIComponent(ean)}&array_sucursales=${arraySucursales}&limit=10`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    res.json({ urlConsultada: url, respuestaCruda: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // Endpoint principal para consultar UN producto.
 // 1. Busca por EAN exacto (más preciso).
 // 2. Si no hay resultados por EAN, intenta por nombre como respaldo.
