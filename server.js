@@ -94,6 +94,18 @@ app.get('/sucursales', async (req, res) => {
   }
 });
 
+app.get('/diagnostico-ean-busqueda', async (req, res) => {
+  const ean = req.query.ean || '7790490998231';
+  try {
+    const sucursales = await obtenerSucursalesCercanas();
+    const idsSucursales = sucursales.map((s) => s.id);
+    const resultado = await buscarProductosPorTexto(ean, idsSucursales);
+    res.json({ ean, cantidadEncontrada: resultado.length, resultado });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ------------------------------------------------------------
 // GET /precio?ean=...&nombre=...
 // ------------------------------------------------------------
