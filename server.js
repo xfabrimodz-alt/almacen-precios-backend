@@ -150,12 +150,43 @@ app.get('/diagnostico-detalle', async (req, res) => {
 
   try {
     const sucursales = await obtenerSucursalesCercanas();
-    const idsSucursales = sucursales.map((s) => s.id);
-    const arraySucursales = encodeURIComponent(JSON.stringify(idsSucursales));
-    const url = `${PRECIOS_CLAROS_BASE}/producto?id_producto=${encodeURIComponent(ean)}&array_sucursales=${arraySucursales}&limit=10`;
-    const resp = await fetch(url);
-    const data = await resp.json();
-    res.json({ urlConsultada: url, respuestaCruda: data });
+    const idsSucursales = sucursales.map((s) => s.id).slice(0, 5); // solo 5 para el test
+
+    const variantes = [
+      {
+        nombre: 'array JSON.stringify + encodeURIComponent',
+        url: `${PRECIOS_CLAROS_BASE}/producto?id_producto=${encodeURIComponent(ean)}&array_sucursales=${encodeURIComponent(JSON.stringify(idsSucursales))}&limit=10`,
+      },
+      {
+        nombre: 'array JSON.stringify SIN encodeURIComponent',
+        url: `${PRECIOS_CLAROS_BASE}/producto?id_producto=${ean}&array_sucursales=${JSON.stringify(idsSucursales)}&limit=10`,
+      },
+      {
+        nombre: 'array separado por comas, sin corchetes',
+        url: `${PRECIOS_CLAROS_BASE}/producto?id_producto=${ean}&array_sucursales=${idsSucursales.join(',')}&limit=10`,
+      },
+      {
+        nombre: 'id_sucursal singular (primera sucursal)',
+        url: `${PRECIOS_CLAROS_BASE}/producto?id_producto=${ean}&id_sucursal=${idsSucursales[0]}&limit=10`,
+      },
+      {
+        nombre: 'solo lat/lng (sin sucursales ni id_sucursal)',
+        url: `${PRECIOS_CLAROS_BASE}/producto?id_producto=${ean}&lat=${ALMACEN_LAT}&lng=${ALMACEN_LNG}&limit=10`,
+      },
+    ];
+
+    const resultados = [];
+    for (const v of variantes) {
+      try {
+        const resp = await fetch(v.url);
+        const data = await resp.json();
+        resultados.push({ variante: v.nombre, url: v.url, respuesta: data });
+      } catch (err) {
+        resultados.push({ variante: v.nombre, url: v.url, error: err.message });
+      }
+    }
+
+    res.json({ idsSucursalesUsados: idsSucursales, resultados });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
