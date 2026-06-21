@@ -94,18 +94,6 @@ app.get('/sucursales', async (req, res) => {
   }
 });
 
-app.get('/diagnostico-ean-busqueda', async (req, res) => {
-  const ean = req.query.ean || '7790490998231';
-  try {
-    const sucursales = await obtenerSucursalesCercanas();
-    const idsSucursales = sucursales.map((s) => s.id);
-    const resultado = await buscarProductosPorTexto(ean, idsSucursales);
-    res.json({ ean, cantidadEncontrada: resultado.length, resultado });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // ------------------------------------------------------------
 // GET /precio?ean=...&nombre=...
 // ------------------------------------------------------------
@@ -125,22 +113,52 @@ app.get('/precio', async (req, res) => {
     const sucursales = await obtenerSucursalesCercanas();
     const idsSucursales = sucursales.map((s) => s.id);
 
-    // Paso 1: buscar por EAN exacto
-    let productos = [];
+    // Paso 1: si hay EAN, consultamos DIRECTO por id_producto.
+    // (El EAN es el id_producto real, no hace falta "buscarlo" primero
+    // como si fuera texto libre — de hecho, el buscador de texto NO
+    // encuentra nada si le pasás un EAN puro como término.)
+    let metodoUsado = null;
+    let resultado = null;
     if (ean) {
-      productos = await buscarProductosPorTexto(ean, idsSucursales);
-      // Filtramos por coincidencia exacta de EAN (el campo "id" de la API es el EAN)
-      productos = productos.filter((p) => p.id === String(ean));
+      const detalle = await obtenerDetalleProducto(ean, idsSucursales);
+      if (detalle.encontrado) {
+        metodoUsado = 'ean';
+        resultado = {
+          ean: detalle.info ? detalle.info.id : String(ean),
+          marca: detalle.info ? detalle.info.marca : null,
+          nombre: detalle.info ? detalle.info.nombre : null,
+          presentacion: detalle.info ? detalle.info.presentacion : null,
+          detallePorCadena: detalle.detallePorCadena,
+        };
+      }
     }
 
     // Paso 2: si no hubo resultado por EAN, probamos por nombre
-    let metodoUsado = 'ean';
-    if (productos.length === 0 && nombre) {
-      productos = await buscarProductosPorTexto(nombre, idsSucursales);
-      metodoUsado = 'nombre';
+    // (acá sí usamos el buscador de texto, que funciona bien con nombres)
+    if (!resultado && nombre) {
+      const encontrados = await buscarProductosPorTexto(nombre, idsSucursales);
+      if (encontrados.length > 0) {
+        const mejorCandidato = encontrados[0];
+        const detalle = await obtenerDetalleProducto(mejorCandidato.id, idsSucursales);
+        metodoUsado = 'nombre';
+        resultado = {
+          ean: mejorCandidato.id,
+          marca: mejorCandidato.marca,
+          nombre: mejorCandidato.nombre,
+          presentacion: mejorCandidato.presentacion,
+          detallePorCadena: detalle.detallePorCadena,
+          // otras coincidencias por nombre, por si la primera no es la correcta
+          otrasCoincidencias: encontrados.slice(1, 5).map((p) => ({
+            ean: p.id,
+            marca: p.marca,
+            nombre: p.nombre,
+            presentacion: p.presentacion,
+          })),
+        };
+      }
     }
 
-    if (productos.length === 0) {
+    if (!resultado) {
       return res.json({
         encontrado: false,
         ean: ean || null,
@@ -149,26 +167,7 @@ app.get('/precio', async (req, res) => {
       });
     }
 
-    // Para el/los producto(s) encontrados, traemos el detalle por sucursal
-    // (precio de lista + promos) usando el endpoint /producto
-    const detalles = await Promise.all(
-      productos.slice(0, 3).map((p) => obtenerDetalleProducto(p.id, idsSucursales))
-    );
-
-    res.json({
-      encontrado: true,
-      metodoUsado,
-      coincidencias: productos.map((p, i) => ({
-        ean: p.id,
-        marca: p.marca,
-        nombre: p.nombre,
-        presentacion: p.presentacion,
-        precioMin: p.precioMin,
-        precioMax: p.precioMax,
-        cantSucursalesDisponible: p.cantSucursalesDisponible,
-        detallePorCadena: detalles[i] || [],
-      })),
-    });
+    res.json({ encontrado: true, metodoUsado, ...resultado });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -200,36 +199,49 @@ app.post('/precios-masivo', async (req, res) => {
     for (const item of productos) {
       const { ean, nombre, idLocal } = item;
       try {
-        let encontrados = [];
-        let metodoUsado = 'ean';
+        let metodoUsado = null;
+        let encontrado = null;
+
+        // Paso 1: EAN directo (consulta exacta por id_producto)
         if (ean) {
-          encontrados = await buscarProductosPorTexto(ean, idsSucursales);
-          encontrados = encontrados.filter((p) => p.id === String(ean));
-        }
-        if (encontrados.length === 0 && nombre) {
-          encontrados = await buscarProductosPorTexto(nombre, idsSucursales);
-          metodoUsado = 'nombre';
+          const detalle = await obtenerDetalleProducto(ean, idsSucursales);
+          if (detalle.encontrado) {
+            metodoUsado = 'ean';
+            encontrado = {
+              eanPreciosClaros: detalle.info ? detalle.info.id : String(ean),
+              nombrePreciosClaros: detalle.info ? detalle.info.nombre : null,
+              detallePorCadena: detalle.detallePorCadena,
+            };
+          }
         }
 
-        if (encontrados.length === 0) {
+        // Paso 2: respaldo por nombre
+        if (!encontrado && nombre) {
+          const candidatos = await buscarProductosPorTexto(nombre, idsSucursales);
+          if (candidatos.length > 0) {
+            const mejor = candidatos[0];
+            const detalle = await obtenerDetalleProducto(mejor.id, idsSucursales);
+            metodoUsado = 'nombre';
+            encontrado = {
+              eanPreciosClaros: mejor.id,
+              nombrePreciosClaros: mejor.nombre,
+              detallePorCadena: detalle.detallePorCadena,
+            };
+          }
+        }
+
+        if (!encontrado) {
           resultados.push({ idLocal, ean, nombre, encontrado: false });
-          continue;
+        } else {
+          resultados.push({
+            idLocal,
+            ean,
+            nombre,
+            encontrado: true,
+            metodoUsado,
+            ...encontrado,
+          });
         }
-
-        const mejor = encontrados[0];
-        const detalle = await obtenerDetalleProducto(mejor.id, idsSucursales);
-
-        resultados.push({
-          idLocal,
-          ean,
-          nombre,
-          encontrado: true,
-          metodoUsado,
-          nombrePreciosClaros: mejor.nombre,
-          precioMin: mejor.precioMin,
-          precioMax: mejor.precioMax,
-          detallePorCadena: detalle,
-        });
       } catch (errItem) {
         resultados.push({ idLocal, ean, nombre, encontrado: false, error: errItem.message });
       }
@@ -257,7 +269,9 @@ async function buscarProductosPorTexto(texto, idsSucursales) {
 
 // Trae precio de lista + Promo A + Promo B para un producto (por EAN/id),
 // agrupado por cadena (bandera), quedándose con el mejor precio de lista
-// de cada cadena entre las sucursales cercanas.
+// de cada cadena entre las sucursales cercanas. También devuelve la info
+// básica del producto (nombre/marca/presentación), que la API incluye en
+// el campo "producto" cuando la consulta es por id_producto exacto.
 async function obtenerDetalleProducto(idProducto, idsSucursales) {
   // IMPORTANTE: confirmado con datos reales que array_sucursales va
   // como lista separada por comas, SIN corchetes ni comillas.
@@ -267,7 +281,9 @@ async function obtenerDetalleProducto(idProducto, idsSucursales) {
   const resp = await fetch(url);
   const data = await resp.json();
 
-  if (data.status !== 200 || !Array.isArray(data.sucursales)) return [];
+  if (data.status !== 200 || !Array.isArray(data.sucursales)) {
+    return { encontrado: false, info: null, detallePorCadena: [] };
+  }
 
   // Agrupar por cadena (banderaDescripcion), quedándonos con el precio
   // de lista más bajo de cada cadena entre las sucursales cercanas.
@@ -306,7 +322,13 @@ async function obtenerDetalleProducto(idProducto, idsSucursales) {
     }
   }
 
-  return Object.values(porCadena).sort((a, b) => a.precioLista - b.precioLista);
+  const detallePorCadena = Object.values(porCadena).sort((a, b) => a.precioLista - b.precioLista);
+
+  return {
+    encontrado: detallePorCadena.length > 0,
+    info: data.producto || null, // { id, marca, nombre, presentacion }
+    detallePorCadena,
+  };
 }
 
 
