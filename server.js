@@ -19,10 +19,14 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// Ubicación fija del almacén (Quilmes, Buenos Aires).
+// Ubicación fija del almacén (San Francisco Solano, partido de Quilmes).
 // Precios Claros pide lat/lng para saber qué sucursales están "cerca".
-const ALMACEN_LAT = -34.7167;
-const ALMACEN_LNG = -58.2667;
+// CORREGIDO: las coordenadas anteriores (-34.7167, -58.2667) apuntaban
+// a Quilmes centro, a ~7.8km de Solano (casi en el borde del radio de
+// 8km), lo que hacía que la app devolviera resultados de sucursales en
+// Quilmes centro en vez de las realmente cercanas a Solano/zona sur.
+const ALMACEN_LAT = -34.7773;
+const ALMACEN_LNG = -58.3090;
 
 const PRECIOS_CLAROS_BASE = 'https://d3e6htiiul5ek9.cloudfront.net/prod';
 
@@ -40,8 +44,9 @@ const CADENAS_OBJETIVO = [
 ];
 
 // Radio máximo (en km) para considerar una sucursal "cercana".
-// Definido para cubrir Quilmes, Solano y Florencio Varela sin
-// traer sucursales lejanas de CABA u otras zonas.
+// Definido para cubrir San Francisco Solano, La Florida, Quilmes oeste,
+// Florencio Varela, Bernal oeste y Berazategui oeste, sin traer
+// sucursales lejanas (Quilmes centro/este, CABA, etc).
 const RADIO_MAXIMO_KM = 8;
 
 // Cache simple en memoria de sucursales cercanas, para no pedirlas
@@ -107,7 +112,7 @@ app.get('/health', (req, res) => {
 // ------------------------------------------------------------
 // GET /sucursales — devuelve las sucursales cercanas filtradas
 // Útil para verificar que la conexión a Precios Claros funciona
-// y ver qué cadenas/sucursales detectó cerca de Quilmes.
+// y ver qué cadenas/sucursales detectó cerca de San Francisco Solano.
 // ------------------------------------------------------------
 app.get('/sucursales', async (req, res) => {
   try {
